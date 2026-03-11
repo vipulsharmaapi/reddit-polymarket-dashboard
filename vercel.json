@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    { "source": "/api/data", "destination": "/api/data" },
+    { "source": "/api/refresh", "destination": "/api/data" }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
+    }
+  ]
+}
