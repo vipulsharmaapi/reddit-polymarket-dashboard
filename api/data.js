@@ -11,39 +11,27 @@ const SUBREDDITS = [
   'ManifoldMarkets'
 ];
 
-const REPORT_BASELINE = {
-  'Polymarket':         { subs: 1505, posts: 34, upvotes: 79, comments: 53 },
-  'Kalshi':             { subs: 28834, posts: 995, upvotes: 6772, comments: 9343 },
-  'polymarket_bets':    { subs: 4554, posts: 260, upvotes: 2478, comments: 1948 },
-  'polymarket_news':    { subs: 675, posts: 139, upvotes: 703, comments: 498 },
-  'polymarket_Traders': { subs: 154, posts: 84, upvotes: 91, comments: 115 },
-  'PredictionMarkets':  { subs: 2281, posts: 81, upvotes: 356, comments: 210 },
-  'polymarketanalysis': { subs: 340, posts: 61, upvotes: 81, comments: 121 },
-  'ManifoldMarkets':    { subs: 386, posts: 3, upvotes: 6, comments: 3 }
-};
-
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     const options = {
-      headers: { 'User-Agent': 'PolymarketDashboard/1.0 (competitor analysis tool)' }
+      headers: { 'User-Agent': 'PolymarketDashboard/1.0 (competitor analysis tool)' },
+      timeout: 8000
     };
-    https.get(url, options, (res) => {
+    const req = https.get(url, options, (res) => {
       if (res.statusCode === 429) {
-        reject(new Error(`Rate limited on ${url}`));
+        reject(new Error('Rate limited'));
         return;
       }
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error(`Parse error for ${url}: ${e.message}`)); }
+        catch (e) { reject(new Error('Parse error')); }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
   });
-}
-
-function delay(ms) {
-  return new Promise(r => setTimeout(r, ms));
 }
 
 async function fetchSubredditData(sub) {
@@ -64,16 +52,12 @@ async function fetchSubredditData(sub) {
   const totalUpvotes = recentPosts.reduce((s, p) => s + p.score, 0);
   const totalComments = recentPosts.reduce((s, p) => s + p.num_comments, 0);
 
-  const baseline = REPORT_BASELINE[sub] || {};
-
   return {
     name: sub,
     displayName: info.display_name_prefixed,
     description: info.public_description || info.title || '',
     subscribers: info.subscribers,
     activeUsers: info.accounts_active || info.active_user_count || 0,
-    created: info.created_utc,
-    icon: info.community_icon?.replace(/&amp;/g, '&') || info.icon_img || '',
     recentPostCount: recentPosts.length,
     recentUpvotes: totalUpvotes,
     recentComments: totalComments,
@@ -99,38 +83,40 @@ async function fetchSubredditData(sub) {
       created: p.created_utc,
       author: p.author,
       flair: p.link_flair_text || ''
-    })),
-    baseline: {
-      subs: baseline.subs || 0,
-      subsDelta: baseline.subs ? info.subscribers - baseline.subs : null
-    }
+    }))
   };
 }
 
 module.exports = async function handler(req, res) {
   try {
-    const results = [];
-    for (let i = 0; i < SUBREDDITS.length; i += 2) {
-      const batch = SUBREDDITS.slice(i, i + 2);
-      const batchResults = await Promise.all(
-        batch.map(sub => fetchSubredditData(sub).catch(err => ({
+    // Fetch ALL 8 subreddits in parallel (no delays) for speed
+    const results = await Promise.all(
+      SUBREDDITS.map(sub =>
+        fetchSubredditData(sub).catch(err => ({
           name: sub,
           error: err.message,
           subscribers: 0,
-          activeUsers: 0
-        })))
-      );
-      results.push(...batchResults);
-      if (i + 2 < SUBREDDITS.length) await delay(1000);
-    }
+          activeUsers: 0,
+          recentPostCount: 0,
+          recentUpvotes: 0,
+          recentComments: 0,
+          avgScore: 0,
+          avgComments: 0,
+          postsPerK: 0,
+          upvotesPerK: 0,
+          commentsPerK: 0,
+          hotPosts: [],
+          newPosts: []
+        }))
+      )
+    );
 
     const data = {
       subreddits: results,
-      fetchedAt: new Date().toISOString(),
-      reportDate: '2026-03-06',
-      reportBaseline: REPORT_BASELINE
+      fetchedAt: new Date().toISOString()
     };
 
+    // Cache for 2 min, serve stale for 5 min while revalidating
     res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(200).json(data);
